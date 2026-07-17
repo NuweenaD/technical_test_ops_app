@@ -1,0 +1,21 @@
+# Interviewer answer key — NEVER commit. Keep this in your own cloud storage
+# and drop it into _interviewer/ only on your machine.
+_interviewer/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
