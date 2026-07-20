@@ -58,11 +58,11 @@ async def close_db():
 # --------------------------------------------------------------------------- #
 # Revenue helper
 # --------------------------------------------------------------------------- #
-
 def _line_net(r):
-    """Net revenue for a single sale line."""
-    return float(r["quantity"] * r["unit_price"] - r["discount_pct"])
-
+    """Return net revenue for a single completed sale line."""
+    gross_revenue = r["quantity"] * r["unit_price"]
+    discount_rate = r["discount_pct"] / Decimal("100")
+    return float(gross_revenue * (Decimal("1") - discount_rate))
 
 # --------------------------------------------------------------------------- #
 # Filters
@@ -88,54 +88,67 @@ def _build_filters(month, category, channel):
 # Summary KPIs
 # --------------------------------------------------------------------------- #
 
+#Gantikan overall function summary - discount treated as fixed RM, Refunded sales included, Category revenue overwritten, online classified as in-store, target attainment incorrect
 async def summary(conn, month=None, category=None, channel=None):
     where, params = _build_filters(month, category, channel)
     rows = await conn.fetch(f"SELECT * FROM sales {where}", *params)
 
-    # Totals
-    total_revenue = 0.0
-    order_count = 0
-    for r in rows:
-        total_revenue += _line_net(r)
-        order_count += 1
+    # FIX: Penapis jualan yang completed sahaja (elak refunded / cancelled sales dimasukkan sekali)
+    # KPI calculations should only include completed sales.
+    completed_rows = [r for r in rows if r["status"] == "completed"]
 
+    # Totals
+    # FIX: _line_net(r) digunakan untuk pastikan discount difahami sebagai percentage (bukan fixed RM sahaja)
+    total_revenue = sum(_line_net(r) for r in completed_rows)
+    order_count = len(completed_rows)
     aov = total_revenue / order_count if order_count else 0.0
 
     # Revenue by category
     by_category = {}
-    for r in rows:
-        subtotal = by_category.get(r["category"], 0)
-        subtotal = _line_net(r)
-        by_category[r["category"]] = subtotal
+    for r in completed_rows:
+        category_name = r["category"]
+        # FIX: Tambah hasil jualan terkini pada amount sedia ada (elak nilai kategori ter-overwritten)
+        by_category[category_name] = (
+            by_category.get(category_name, 0.0) + _line_net(r)
+        )
 
     # Revenue by channel
     by_channel = {"online": 0.0, "in_store": 0.0}
-    for r in rows:
-        ch = r["channel"]
-        if "in" in ch:
-            by_channel["in_store"] += _line_net(r)
-        elif "online" in ch:
-            by_channel["online"] += _line_net(r)
+    for r in completed_rows:
+        channel_name = r["channel"]
+        # FIX: Match follows kunci saluran yang tepat (avoid online classifies as in_store)
+        if channel_name in by_channel:
+            by_channel[channel_name] += _line_net(r)
 
     # Target attainment for the selected month
     target = None
     if month:
         target = await conn.fetchval(
-            "SELECT target_amount FROM monthly_targets WHERE month = $1", month
+            "SELECT target_amount FROM monthly_targets WHERE month = $1",
+            month,
         )
-    attainment_pct = round(total_revenue / order_count * 100, 1) if order_count else None
+
+    target_value = float(target) if target is not None else None
+    # FIX: Kira pencapaian sasaran (%) dengan membahagikan total_revenue with target_value correctly
+    attainment_pct = (
+        round(total_revenue / target_value * 100, 1)
+        if target_value is not None and target_value > 0
+        else None
+    )
 
     return {
         "total_revenue": round(total_revenue, 2),
         "order_count": order_count,
         "avg_order_value": round(aov, 2),
-        "target": float(target) if target is not None else None,
+        "target": target_value,
         "attainment_pct": attainment_pct,
         "by_category": [
-            {"category": k, "revenue": round(v, 2)} for k, v in sorted(by_category.items())
+            {"category": key, "revenue": round(value, 2)}
+            for key, value in sorted(by_category.items())
         ],
         "by_channel": [
-            {"channel": k, "revenue": round(v, 2)} for k, v in by_channel.items()
+            {"channel": key, "revenue": round(value, 2)}
+            for key, value in by_channel.items()
         ],
     }
 
