@@ -7,15 +7,19 @@ sample data the first time the database is empty.
 The dashboard KPIs are computed in `summary()`.
 """
 
+import calendar
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import asyncpg
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", "postgresql://sales:sales@localhost:5442/sales"
 )
+
+MYT = ZoneInfo("Asia/Kuala_Lumpur")
 
 # Shared connection pool, set by init_db().
 pool: asyncpg.Pool | None = None
@@ -150,6 +154,95 @@ async def summary(conn, month=None, category=None, channel=None):
             {"channel": key, "revenue": round(value, 2)}
             for key, value in by_channel.items()
         ],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Pace to Target
+# --------------------------------------------------------------------------- #
+
+def _days_in_month(year: int, month: int) -> int:
+    """Return the number of days in the selected calendar month."""
+    return calendar.monthrange(year, month)[1]
+
+
+async def pace_to_target(conn, month: str):
+    """Month-to-date revenue and run-rate projection against the monthly target.
+
+    Reuses the same completed-only, percentage-discount net revenue as
+    `summary()`. All "today" comparisons use Asia/Kuala_Lumpur (UTC+8).
+    """
+    try:
+        year, selected_month = (int(value) for value in month.split("-"))
+        first_of_month = date(year, selected_month, 1)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Month must be a valid YYYY-MM value") from exc
+
+    today = datetime.now(MYT).date()
+    days_in_month = _days_in_month(year, selected_month)
+
+    is_past_month = (year, selected_month) < (today.year, today.month)
+    is_future_month = first_of_month > today
+
+    target = await conn.fetchval(
+        "SELECT target_amount FROM monthly_targets WHERE month = $1", month
+    )
+    target_value = float(target) if target is not None else None
+
+    if is_future_month:
+        return {
+            "month": month,
+            "month_to_date_revenue": 0.0,
+            "days_elapsed": 0,
+            "days_in_month": days_in_month,
+            "projected_revenue": None,
+            "target": target_value,
+            "pace_vs_target_rm": None,
+            "pace_vs_target_pct": None,
+            "status": "not_started",
+        }
+
+    where, params = _build_filters(month, None, None)
+    rows = await conn.fetch(f"SELECT * FROM sales {where}", *params)
+    completed_rows = [r for r in rows if r["status"] == "completed"]
+
+    if not is_past_month:
+        # Current month: exclude any sale dated after today (e.g. a manually
+        # added future-dated row) so month-to-date stays honest.
+        completed_rows = [r for r in completed_rows if r["sale_date"] <= today]
+
+    month_to_date_revenue = sum(_line_net(r) for r in completed_rows)
+
+    if is_past_month:
+        days_elapsed = days_in_month
+        projected_revenue = month_to_date_revenue
+    else:
+        days_elapsed = today.day
+        projected_revenue = (month_to_date_revenue / days_elapsed) * days_in_month
+
+    if target_value is not None and target_value > 0:
+        pace_vs_target_rm = projected_revenue - target_value
+        pace_vs_target_pct = pace_vs_target_rm / target_value * 100
+        status = "on_track" if projected_revenue >= target_value else "at_risk"
+    else:
+        pace_vs_target_rm = None
+        pace_vs_target_pct = None
+        status = "no_target"
+
+    return {
+        "month": month,
+        "month_to_date_revenue": round(month_to_date_revenue, 2),
+        "days_elapsed": days_elapsed,
+        "days_in_month": days_in_month,
+        "projected_revenue": round(projected_revenue, 2),
+        "target": target_value,
+        "pace_vs_target_rm": (
+            round(pace_vs_target_rm, 2) if pace_vs_target_rm is not None else None
+        ),
+        "pace_vs_target_pct": (
+            round(pace_vs_target_pct, 1) if pace_vs_target_pct is not None else None
+        ),
+        "status": status,
     }
 
 
