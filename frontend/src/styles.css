@@ -435,3 +435,138 @@ tr.refunded td {
     grid-template-columns: 1fr;
   }
 }
+
+/* Revenue Recovery Advisor ---------------------------------------------- */
+
+.advisor-panel {
+  position: relative;
+}
+
+.advisor-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 16px;
+}
+
+.advisor-header h2 {
+  margin-bottom: 4px;
+}
+
+.advisor-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.advisor-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.advisor-at_risk,
+.advisor-completed_below_target {
+  color: var(--danger);
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+}
+
+.advisor-on_track,
+.advisor-target_reached,
+.advisor-completed_on_target {
+  color: var(--ok);
+  background: #ecfdf3;
+  border: 1px solid #abefc6;
+}
+
+.advisor-planning,
+.advisor-no_target {
+  color: var(--muted);
+  background: var(--track);
+  border: 1px solid var(--border);
+}
+
+.advisor-message {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border-left: 3px solid var(--ink);
+  background: #fafbfc;
+  border-radius: 0 10px 10px 0;
+  font-size: 14px;
+}
+
+.advisor-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.advisor-item {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.advisor-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.advisor-value {
+  margin-top: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.advisor-drivers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.advisor-driver {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.advisor-driver-value {
+  margin-top: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+@media (max-width: 760px) {
+  .advisor-header {
+    flex-direction: column;
+  }
+
+  .advisor-grid {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .advisor-grid,
+  .advisor-drivers {
+    grid-template-columns: 1fr;
+  }
+}

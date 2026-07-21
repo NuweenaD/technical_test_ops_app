@@ -11,6 +11,7 @@ import calendar
 import os
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from math import ceil
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -245,6 +246,335 @@ async def pace_to_target(conn, month: str):
         "status": status,
     }
 
+# --------------------------------------------------------------------------- #
+# Revenue Recovery Advisor
+# --------------------------------------------------------------------------- #
+
+async def recovery_advisor(conn, month: str):
+    """Generate an actionable revenue recovery plan for a selected month."""
+
+    # Reuse Part B calculations and month validation.
+    pace = await pace_to_target(conn, month)
+
+    year, selected_month = (
+        int(value)
+        for value in month.split("-")
+    )
+
+    today = datetime.now(MYT).date()
+    first_of_month = date(
+        year,
+        selected_month,
+        1,
+    )
+
+    is_past_month = (
+        year,
+        selected_month,
+    ) < (
+        today.year,
+        today.month,
+    )
+
+    is_future_month = first_of_month > today
+
+    # Load sales for the selected month.
+    where, params = _build_filters(
+        month,
+        None,
+        None,
+    )
+
+    rows = await conn.fetch(
+        f"SELECT * FROM sales {where}",
+        *params,
+    )
+
+    completed_rows = [
+        row
+        for row in rows
+        if row["status"] == "completed"
+    ]
+
+    if is_future_month:
+        # Future sales must not influence planning calculations.
+        completed_rows = []
+
+    elif not is_past_month:
+        # Current month: only include sales up to today.
+        completed_rows = [
+            row
+            for row in completed_rows
+            if row["sale_date"] <= today
+        ]
+
+    month_to_date_revenue = pace[
+        "month_to_date_revenue"
+    ]
+
+    order_count = len(completed_rows)
+
+    current_aov = (
+        month_to_date_revenue / order_count
+        if order_count > 0
+        else 0.0
+    )
+
+    current_daily_revenue = (
+        month_to_date_revenue
+        / pace["days_elapsed"]
+        if pace["days_elapsed"] > 0
+        else None
+    )
+
+    # Identify the strongest revenue-driving category.
+    category_totals = {}
+
+    for row in completed_rows:
+        category_name = row["category"]
+
+        category_totals[category_name] = (
+            category_totals.get(
+                category_name,
+                0.0,
+            )
+            + _line_net(row)
+        )
+
+    top_category = (
+        max(
+            category_totals.items(),
+            key=lambda item: item[1],
+        )
+        if category_totals
+        else None
+    )
+
+    # Identify the strongest revenue-driving channel.
+    channel_totals = {}
+
+    for row in completed_rows:
+        channel_name = row["channel"]
+
+        channel_totals[channel_name] = (
+            channel_totals.get(
+                channel_name,
+                0.0,
+            )
+            + _line_net(row)
+        )
+
+    top_channel = (
+        max(
+            channel_totals.items(),
+            key=lambda item: item[1],
+        )
+        if channel_totals
+        else None
+    )
+
+    target = pace["target"]
+
+    days_remaining = max(
+        pace["days_in_month"]
+        - pace["days_elapsed"],
+        0,
+    )
+
+    projected_revenue = pace[
+        "projected_revenue"
+    ]
+
+    revenue_gap = None
+    required_daily_revenue = None
+    additional_orders_required = None
+    required_orders_per_day = None
+    final_variance = None
+
+    if target is None or target <= 0:
+        status = "no_target"
+
+        message = (
+            "A recovery plan cannot be calculated because "
+            "no valid monthly target has been set."
+        )
+
+    elif is_future_month:
+        status = "planning"
+
+        revenue_gap = target
+
+        required_daily_revenue = (
+            target / pace["days_in_month"]
+        )
+
+        message = (
+            "This month has not started. The recommended "
+            f"starting pace is RM{required_daily_revenue:,.2f} "
+            "per day."
+        )
+
+    elif is_past_month:
+        final_variance = (
+            month_to_date_revenue
+            - target
+        )
+
+        if final_variance >= 0:
+            status = "completed_on_target"
+
+            message = (
+                "The month is complete and the target was "
+                f"exceeded by RM{final_variance:,.2f}."
+            )
+
+        else:
+            status = "completed_below_target"
+
+            message = (
+                "The month is complete and finished "
+                f"RM{abs(final_variance):,.2f} below target."
+            )
+
+    else:
+        revenue_gap = max(
+            target - month_to_date_revenue,
+            0.0,
+        )
+
+        if revenue_gap <= 0:
+            status = "target_reached"
+
+            required_daily_revenue = 0.0
+            additional_orders_required = 0
+            required_orders_per_day = 0
+
+            message = (
+                "The monthly target has already been reached."
+            )
+
+        elif days_remaining == 0:
+            status = "at_risk"
+
+            message = (
+                "The target has not been reached and no days "
+                "remain in the selected month."
+            )
+
+        else:
+            required_daily_revenue = (
+                revenue_gap / days_remaining
+            )
+
+            if current_aov > 0:
+                additional_orders_required = ceil(
+                    revenue_gap / current_aov
+                )
+
+                required_orders_per_day = ceil(
+                    additional_orders_required
+                    / days_remaining
+                )
+
+            status = (
+                "on_track"
+                if pace["status"] == "on_track"
+                else "at_risk"
+            )
+
+            if status == "on_track":
+                message = (
+                    "The current sales pace is sufficient to "
+                    "reach the target. Maintain at least "
+                    f"RM{required_daily_revenue:,.2f} per day "
+                    "for the remaining period."
+                )
+
+            elif required_orders_per_day is not None:
+                message = (
+                    f"Approximately RM{required_daily_revenue:,.2f} "
+                    "per day is required, equivalent to around "
+                    f"{required_orders_per_day} additional orders "
+                    "per day at the current average order value."
+                )
+
+            else:
+                message = (
+                    f"Approximately RM{required_daily_revenue:,.2f} "
+                    "per day is required. Estimated order volume "
+                    "is unavailable because there are no completed "
+                    "sales available to calculate an average order value."
+                )
+
+    return {
+        "month": month,
+        "status": status,
+        "month_to_date_revenue": round(
+            month_to_date_revenue,
+            2,
+        ),
+        "projected_revenue": (
+            round(projected_revenue, 2)
+            if projected_revenue is not None
+            else None
+        ),
+        "target": target,
+        "revenue_gap": (
+            round(revenue_gap, 2)
+            if revenue_gap is not None
+            else None
+        ),
+        "days_remaining": days_remaining,
+        "required_daily_revenue": (
+            round(required_daily_revenue, 2)
+            if required_daily_revenue is not None
+            else None
+        ),
+        "additional_orders_required": (
+            additional_orders_required
+        ),
+        "required_orders_per_day": (
+            required_orders_per_day
+        ),
+        "current_order_count": order_count,
+        "current_aov": round(
+            current_aov,
+            2,
+        ),
+        "current_daily_revenue": (
+            round(current_daily_revenue, 2)
+            if current_daily_revenue is not None
+            else None
+        ),
+        "final_variance": (
+            round(final_variance, 2)
+            if final_variance is not None
+            else None
+        ),
+        "top_category": (
+            {
+                "name": top_category[0],
+                "revenue": round(
+                    top_category[1],
+                    2,
+                ),
+            }
+            if top_category
+            else None
+        ),
+        "top_channel": (
+            {
+                "name": top_channel[0],
+                "revenue": round(
+                    top_channel[1],
+                    2,
+                ),
+            }
+            if top_channel
+            else None
+        ),
+        "message": message,
+    }
 
 # --------------------------------------------------------------------------- #
 # Sales CRUD

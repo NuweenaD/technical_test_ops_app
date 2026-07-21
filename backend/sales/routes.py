@@ -69,3 +69,22 @@ async def get_pace_to_target(month: str = Query(..., pattern=r"^\d{4}-\d{2}$")):
             return await db.pace_to_target(conn, month)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+@router.get("/recovery-advisor")
+async def get_recovery_advisor(
+    month: str = Query(
+        ...,
+        pattern=r"^\d{4}-\d{2}$",
+    ),
+):
+    try:
+        async with db.pool.acquire() as conn:
+            return await db.recovery_advisor(
+                conn,
+                month,
+            )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+        ) from exc

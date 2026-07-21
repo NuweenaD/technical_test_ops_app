@@ -23,6 +23,11 @@ export const getSales = (q) => request(`/api/sales${qs(q)}`);
 export const getFilters = () => request(`/api/filters`);
 export const getPaceToTarget = (month) => request(`/api/pace-to-target${qs({ month })}`);
 
+export const getRecoveryAdvisor = (month) =>
+  request(
+    `/api/recovery-advisor${qs({ month })}`
+  );
+  
 export const createSale = (body) =>
   request(`/api/sales`, {
     method: "POST",
