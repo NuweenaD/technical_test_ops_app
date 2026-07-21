@@ -3,6 +3,7 @@ import * as api from "./api.js";
 import FilterBar from "./components/FilterBar.jsx";
 import KpiCards from "./components/KpiCards.jsx";
 import Breakdown from "./components/Breakdown.jsx";
+import PaceToTarget from "./components/PaceToTarget.jsx";
 import AddSaleForm from "./components/AddSaleForm.jsx";
 import SalesTable from "./components/SalesTable.jsx";
 
@@ -15,15 +16,21 @@ export default function App() {
   const [filters, setFilters] = useState({ month: currentMonth(), category: "", channel: "" });
   const [options, setOptions] = useState({ categories: [], channels: [], months: [] });
   const [summary, setSummary] = useState(null);
+  const [pace, setPace] = useState(null);
   const [sales, setSales] = useState([]);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [s, list] = await Promise.all([api.getSummary(filters), api.getSales(filters)]);
+      const [s, list, paceData] = await Promise.all([
+        api.getSummary(filters),
+        api.getSales(filters),
+        api.getPaceToTarget(filters.month),
+      ]);
       setSummary(s);
       setSales(list);
+      setPace(paceData);
     } catch (e) {
       setError(String(e.message || e));
     }
@@ -49,6 +56,8 @@ export default function App() {
       <FilterBar filters={filters} options={options} onChange={setFilters} />
 
       {summary && <KpiCards summary={summary} />}
+
+      {pace && <PaceToTarget data={pace} />}
 
       {summary && (
         <div className="grid-2">
