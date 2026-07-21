@@ -1,12 +1,12 @@
 """HTTP routes for the Sales KPI Dashboard.
 
 Thin handlers — they acquire a connection and delegate to `db`. The KPI math
-lives in `db.summary()`.
+lives in `db.summary()` / `db.pace_to_target()`.
 """
 
 from datetime import date
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 import db
@@ -60,3 +60,12 @@ async def get_filters():
 async def get_targets():
     async with db.pool.acquire() as conn:
         return await db.list_targets(conn)
+
+
+@router.get("/pace-to-target")
+async def get_pace_to_target(month: str = Query(..., pattern=r"^\d{4}-\d{2}$")):
+    try:
+        async with db.pool.acquire() as conn:
+            return await db.pace_to_target(conn, month)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
